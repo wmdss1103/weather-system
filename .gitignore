@@ -2,7 +2,3 @@
 ~$*
 .DS_Store
 Thumbs.db
-
-# 演示文稿（不属于网页项目代码）
-*.pptx
-*.ppt
