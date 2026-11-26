@@ -1,0 +1,1499 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>全国城市天气 · 3D 天气实景</title>
+<style>
+  :root {
+    --bg: #05080d;
+    --panel: rgba(10, 16, 26, 0.72);
+    --panel-border: rgba(90, 140, 200, 0.14);
+    --text: #c8d6e8;
+    --text-dim: #5c6e86;
+    --accent: #6fb3ff;
+    --accent-warm: #e8a54b;
+    --good: #4fd6a2;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+    user-select: none;
+  }
+
+  /* ===== 顶部栏 ===== */
+  header {
+    height: 44px;
+    display: flex;
+    align-items: center;
+    padding: 0 18px;
+    gap: 26px;
+    background: linear-gradient(180deg, rgba(14,22,36,.9), rgba(8,12,20,.6));
+    border-bottom: 1px solid var(--panel-border);
+    font-size: 12px;
+  }
+  header .logo {
+    font-size: 15px;
+    font-weight: bold;
+    letter-spacing: 2px;
+    color: #e6eefb;
+  }
+  header .meta { color: var(--text-dim); }
+  header .meta b { color: var(--text); font-weight: normal; }
+  header .spacer { flex: 1; }
+  header .status { color: var(--good); }
+  header .status::before { content: "●"; font-size: 9px; margin-right: 5px; }
+  #btnTheme {
+    background: rgba(232,165,75,.15);
+    border: 1px solid rgba(232,165,75,.45);
+    color: var(--accent-warm);
+    padding: 4px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 2px;
+  }
+  #btnTheme:hover { background: rgba(232,165,75,.28); }
+
+  /* ===== 布局 ===== */
+  main {
+    display: flex;
+    height: calc(100% - 44px);
+  }
+  #stage { flex: 1; position: relative; min-width: 0; }
+  #skyCanvas, #scene3d, #rainCanvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #skyCanvas, #scene3d { pointer-events: none; }
+  #stage { background: radial-gradient(ellipse at 50% 35%, #162d47 0%, #060c16 70%); overflow: hidden; }
+  #rainCanvas { cursor: grab; touch-action: none; }
+  #rainCanvas.dragging { cursor: grabbing; }
+  #curveCanvas { touch-action: none; }
+  .view-tools { position: absolute; top: 102px; right: 24px; z-index: 4; display: flex; gap: 8px; }
+  .view-tools button { color: #a8ceef; background: rgba(10,24,40,.86); border: 1px solid #29465f; border-radius: 5px; padding: 7px 11px; cursor: pointer; font: inherit; font-size: 11px; }
+  .view-tools button:hover, .view-tools button[aria-pressed="true"] { background: #1e4562; color: #e3f4ff; }
+  .scene-tag { position: absolute; bottom: 156px; left: 28px; font: 10px Consolas, monospace; letter-spacing: 2px; color: #7ca3be; pointer-events: none; }
+  .scene-help { position: absolute; bottom: 132px; left: 28px; right: 15px; color: #a3bdd1; font-size: 11px; pointer-events: none; }
+  .render-warning { position: absolute; top: 150px; left: 28px; right: 20px; color: #ebbf81; font-size: 12px; pointer-events: none; }
+  .y-axis { opacity: .6; }
+  .time-hint { bottom: 105px !important; }
+  .play-ctrl { bottom: 12px; }
+  @media (max-width: 900px) { header .meta { display: none; } aside { width: 285px; padding: 14px; } .stage-title { left: 22px; } .stage-title h1 { font-size: 22px; } }
+  @media (max-width: 640px) { html, body { height: auto; overflow: auto; } main { height: auto; flex-direction: column; } #stage { flex: none; height: 70vh; min-height: 420px; } aside { width: 100%; border-left: 0; border-top: 1px solid var(--panel-border); } .scene-help { font-size: 10px; } .y-axis { display: none; } }
+
+  /* 左上角标题 */
+  .stage-title {
+    position: absolute; top: 22px; left: 34px; z-index: 3; pointer-events: none;
+  }
+  .stage-title h1 { font-size: 26px; font-weight: bold; color: #dfe9f7; letter-spacing: 3px; }
+  .stage-title p { font-size: 12px; color: var(--text-dim); margin-top: 6px; letter-spacing: 1px; }
+
+  /* Y 轴刻度 */
+  .y-axis {
+    position: absolute; left: 30px; top: 110px; bottom: 70px; z-index: 2;
+    display: flex; flex-direction: column; justify-content: space-between;
+    font-size: 11px; color: var(--text-dim); pointer-events: none; text-align: right;
+  }
+  .y-axis .val { color: var(--accent); font-size: 13px; }
+  .y-axis .unit { font-size: 9px; }
+
+  /* 当前读数 */
+  .current-readout {
+    position: absolute; top: 24px; right: 26px; z-index: 3; text-align: right; pointer-events: none;
+  }
+  .current-readout .big { font-size: 34px; color: var(--accent); font-weight: 300; }
+  .current-readout .big small { font-size: 13px; color: var(--text-dim); margin-left: 4px; }
+
+  /* 底部时间轴提示 */
+  .time-hint {
+    position: absolute; bottom: 74px; left: 0; right: 0; text-align: center;
+    font-size: 12px; color: var(--text-dim); z-index: 2; pointer-events: none;
+  }
+
+  /* 播放控制 */
+  .play-ctrl {
+    position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);
+    z-index: 4; display: flex; align-items: center; gap: 12px;
+    background: rgba(10,16,26,.8); border: 1px solid var(--panel-border);
+    padding: 6px 16px; border-radius: 20px;
+  }
+  .play-ctrl button {
+    background: none; border: none; color: var(--accent); font-size: 15px; cursor: pointer;
+    padding: 2px 6px;
+  }
+  .play-ctrl button:hover { color: #a8d0ff; }
+  .play-ctrl .tlabel { font-size: 12px; color: var(--text); min-width: 52px; text-align: center; }
+
+  /* ===== 右侧面板 ===== */
+  aside {
+    width: 330px; flex-shrink: 0;
+    background: var(--panel);
+    border-left: 1px solid var(--panel-border);
+    display: flex; flex-direction: column;
+    padding: 16px 18px;
+    gap: 14px;
+    overflow-y: auto;
+  }
+  aside h2 { font-size: 15px; color: #e6eefb; letter-spacing: 1px; }
+  aside .sub { font-size: 11px; color: var(--text-dim); line-height: 1.7; }
+
+  .card {
+    background: rgba(16, 26, 42, .55);
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 12px;
+  }
+  .card h3 { font-size: 12px; color: var(--text); margin-bottom: 8px; letter-spacing: 1px; }
+  .card .hint { font-size: 10px; color: var(--text-dim); margin-top: 8px; line-height: 1.6; }
+
+  #curveCanvas { width: 100%; height: 150px; display: block; cursor: crosshair; }
+
+  .curve-head {
+    display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px;
+  }
+  .curve-head .cv { font-size: 18px; color: var(--accent); }
+  .curve-head .cv small { font-size: 10px; color: var(--text-dim); }
+
+  textarea#batchInput {
+    width: 100%; height: 88px;
+    background: rgba(6, 10, 18, .8);
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    font-family: Consolas, monospace;
+    font-size: 11px;
+    padding: 8px;
+    resize: vertical;
+    user-select: text;
+    line-height: 1.5;
+  }
+  textarea#batchInput:focus { outline: 1px solid rgba(111,179,255,.4); }
+
+  .row-info { font-size: 11px; color: var(--text-dim); }
+  .row-info b { color: var(--text); font-weight: normal; }
+  .row-info .dot { color: var(--accent); }
+
+  .city-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+  .city-row .dot { color: var(--accent); }
+  select#citySelect {
+    background: rgba(6,10,18,.8); color: var(--text);
+    border: 1px solid var(--panel-border); padding: 4px 8px; font-size: 12px;
+  }
+
+  .btn-row { display: flex; gap: 10px; margin-top: auto; }
+  .btn {
+    flex: 1; padding: 9px 0; font-size: 13px; cursor: pointer;
+    border-radius: 3px; letter-spacing: 1px;
+  }
+  #btnReset {
+    background: rgba(111,179,255,.12);
+    border: 1px solid rgba(111,179,255,.4);
+    color: var(--accent);
+  }
+  #btnReset:hover { background: rgba(111,179,255,.22); }
+  #btnApply {
+    background: linear-gradient(180deg, #3d82d6, #2a5ea8);
+    border: 1px solid #5a9be0;
+    color: #fff;
+  }
+  #btnApply:hover { filter: brightness(1.15); }
+  #btnApply:disabled { opacity: .5; cursor: not-allowed; }
+
+  .toast {
+    position: fixed; top: 56px; left: 50%; transform: translateX(-50%);
+    background: rgba(20,40,66,.95); border: 1px solid rgba(111,179,255,.4);
+    color: #dfeeff; padding: 8px 22px; font-size: 13px; border-radius: 3px;
+    z-index: 99; opacity: 0; transition: opacity .3s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+  .toast.err { border-color: rgba(230,110,90,.5); }
+
+  aside > * { flex-shrink: 0; }
+  .location-selectors { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .location-selectors label { min-width: 0; font-size: 10px; color: #8ba6bd; }
+  .location-selectors label:last-child { grid-column: 1 / -1; }
+  .location-selectors select, select#citySelect { display: block; width: 100%; min-width: 0; margin-top: 4px; color: #c9e3f5; background: #0a1928; border: 1px solid #29465c; border-radius: 4px; padding: 7px 5px; font: inherit; font-size: 12px; }
+  #cityOverview { max-height: 245px; overflow-y: auto; }
+  .view-tools { top: 125px; }
+  #selectedPeriod { max-width: 220px; }
+  .current-readout { max-width: 45%; }
+  header .meta { white-space: nowrap; font-size: 10px; }
+  @media (max-width: 1100px) { header .meta:nth-of-type(3) { display: none; } }
+  @media (max-width: 900px) { header .meta { display: none; } }
+  .sync-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .sync-row button { border: 1px solid #315473; background: #11283d; color: #b8dcf5; border-radius: 4px; padding: 6px 10px; cursor: pointer; font: inherit; font-size: 11px; }
+  .sync-row button:disabled { opacity: .5; cursor: wait; }
+  .sync-state { font-size: 10px; line-height: 1.5; color: #8ca3b9; margin-top: 8px; }
+  .sync-state[data-state="ok"] { color: #68cfb4; }
+  .sync-state[data-state="error"] { color: #e8b278; }
+  .weather-main { display: flex; justify-content: space-between; align-items: center; margin: 10px 0; }
+  .weather-temp { color: #e0effb; font-size: 31px; font-weight: 300; }
+  .weather-description { color: #a8cceb; font-size: 14px; text-align: right; }
+  .weather-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 10px; color: #819bb2; }
+  .weather-grid b { display: block; font-size: 13px; color: #c7dfef; font-weight: normal; margin-top: 2px; }
+  .weather-footnote { font-size: 10px; color: #7892a8; line-height: 1.7; margin-top: 10px; }
+  .weather-footnote a { color: #90bada; }
+  .mode-badge { font-size: 10px; padding: 3px 7px; border: 1px solid #3f556b; border-radius: 12px; color: #d4b78a; }
+  .mode-badge[data-live="true"] { border-color: #285b55; color: #7bd7bf; }
+  .city-overview { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 10px; }
+  .city-weather { text-align: left; color: #b8cfe0; border: 1px solid #233d53; background: #0b1826; border-radius: 4px; padding: 7px; cursor: pointer; font: inherit; }
+  .city-weather[aria-pressed="true"] { border-color: #5d9ecc; background: #142e43; }
+  .city-weather strong { font-size: 11px; }
+  .city-weather span { float: right; color: #8fc5e9; font-size: 11px; }
+  .city-weather small { display: block; font-size: 9px; color: #7f9bb2; margin-top: 4px; }
+  details.card summary { color: #b9d2e5; font-size: 12px; cursor: pointer; }
+  #selectedPeriod { max-width: 260px; font-size: 10px; color: #9eb9d0; line-height: 1.6; margin-top: 4px; }
+  #curvePeriod { color: #8fb0c9; }
+  .btn-row { position: sticky; bottom: -16px; background: #0b1420; padding: 10px 0; z-index: 5; }
+  .effect-panel { background: linear-gradient(140deg, #142a3d, #0c1726); border-color: #2c4a60; }
+  .effect-panel h3 { margin: 0; }
+  .effect-panel .mode-badge { white-space: nowrap; }
+  .effect-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+  .effect-options label { min-width: 0; font-size: 10px; color: #91aec4; }
+  .effect-options label:first-child { grid-column: 1 / -1; }
+  .effect-options select { width: 100%; margin-top: 5px; padding: 7px 6px; border: 1px solid #34546c; border-radius: 5px; background: #0a1928; color: #d1e6f5; font-size: 11px; }
+  #sceneStatus { font-size: 11px; line-height: 1.8; color: #a7c7dc; margin-top: 11px; }
+  #sceneStatus[data-preview="true"] { color: #f0c47d; }
+  .scene-label { display: inline-flex; align-items: center; gap: 7px; margin-bottom: 9px; padding: 5px 10px; border: 1px solid #46708c88; border-radius: 20px; background: #071321aa; color: #c2e7fd; font-size: 10px; letter-spacing: 1px; }
+  .scene-label::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: #8ed6f5; box-shadow: 0 0 9px #8ed6f599; }
+  .stage-title h1 { font-size: clamp(21px, 2.5vw, 32px); letter-spacing: 2px; text-shadow: 0 2px 18px #06111c99; }
+  .stage-title p { color: #adc8de; text-shadow: 0 1px 6px #06111c; max-width: 360px; }
+  .y-axis { display: none; }
+  .scene-tag { padding: 5px 9px; border-radius: 4px; background: #071321a3; color: #b6d3e8; }
+  .current-readout { padding: 10px 13px; border: 1px solid #36556a66; border-radius: 8px; background: #07132199; backdrop-filter: blur(8px); }
+  .current-readout .big { color: #b7e0ff; }
+  .view-tools { top: 149px; }
+  .render-warning { top: 192px; background: #07132199; border-radius: 4px; }
+  .render-warning:empty { display: none; }
+  @media (max-width: 900px) { aside { width: 305px; padding: 14px; } .stage-title { left: 20px; } header .logo { font-size: 12px; letter-spacing: 1px; } }
+  @media (max-width: 640px) { html, body { height: auto; overflow: auto; } main { flex-direction: column; height: auto; } aside { width: 100%; box-sizing: border-box; } #stage { height: 72vh; min-height: 490px; } .stage-title { top: 20px; left: 16px; max-width: 52%; } .stage-title h1 { font-size: 22px; } .stage-title p { font-size: 10px; line-height: 1.7; } .current-readout { top: 23px; right: 12px; max-width: 43%; padding: 7px; } .current-readout .big { font-size: 25px; } #selectedPeriod { font-size: 9px; } .view-tools { right: 12px; top: 158px; gap: 5px; } .view-tools button { padding: 7px; } .scene-help { left: 18px; font-size: 9px; } .scene-tag { left: 16px; font-size: 9px; } .time-hint { font-size: 10px; } }
+  .view-tools { flex-wrap: wrap; justify-content: flex-end; max-width: calc(100% - 36px); }
+  .view-tools .sun-demo { color: #ffdea0; border-color: #9b7745; background: #382b1dcc; }
+  .view-tools .sun-demo[aria-pressed="true"] { background: #73502c; color: #fff0c8; }
+  .stage-title .solar-hud { margin-top: 9px; color: #ffdda2; font-size: 11px; line-height: 1.7; max-width: 430px; padding: 5px 8px; border-radius: 4px; background: #08121dbb; letter-spacing: 0; }
+  @media(max-width:640px) { .view-tools { top: 205px; left: 12px; right: 12px; max-width: none; justify-content: flex-start; gap: 6px; } .stage-title { max-width: 52%; } .stage-title .solar-hud { font-size: 9px; } }
+  @media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-thumb { background: rgba(90,140,200,.25); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="logo">全国城市天气 · 3D 实景</span>
+  <span class="meta">系统时间: <b id="clock">--</b></span>
+  <span class="meta">曲线来源: <b id="sourceLabel">等待联网降雨数据</b></span>
+  <span class="meta">同步状态: <b class="status" id="headerSync">等待联网</b></span>
+  <span class="spacer"></span>
+  <button id="btnTheme">夜间模式 · 黄色</button>
+</header>
+
+<main>
+  <div id="stage">
+    <canvas id="skyCanvas" aria-hidden="true"></canvas>
+    <canvas id="scene3d" aria-label="随天气与昼夜变化的三维城市"></canvas>
+    <canvas id="rainCanvas" tabindex="0" aria-label="三维场景交互层；拖动旋转，滚轮缩放，方向键调整视角"></canvas>
+    <div class="view-tools">
+      <button id="btnSolarPreviewTop" class="sun-demo" aria-pressed="false">日出日落演示</button>
+      <button id="btnSceneNow">回到现在</button>
+      <button id="btnOrbit" aria-pressed="false">自动环绕</button>
+      <button id="btnViewReset">重置视角</button>
+    </div>
+    <div class="scene-tag" id="sceneTag">3D RAIN / INTERACTIVE CITY</div>
+    <div class="scene-help">左键拖动旋转 · 滚轮缩放 · 右键 / Shift 拖动平移 · 双击复位</div>
+    <div class="render-warning" id="renderWarning" role="status"></div>
+    <div class="stage-title">
+      <div class="scene-label" id="sceneBadge">天气场景 · 等待同步</div>
+      <h1 id="sceneTitle">城市天气实景</h1>
+      <p id="stageSubtitle">湛江 · 小时降雨均值 · mm/h</p>
+      <p id="solarHud" class="solar-hud">太阳时刻待更新 · 06:00 日出 / 18:00 日落</p>
+    </div>
+    <div class="current-readout">
+      <div class="big"><span id="bigVal">--</span><small>mm/h</small></div>
+      <div id="selectedPeriod">示例曲线 · 非实况</div>
+    </div>
+    <div class="y-axis" id="yAxis">
+      <div><div class="val" id="yv20">20</div><div class="unit">mm/h ↑</div></div>
+      <div><div class="val" id="yv13">12.8</div></div>
+      <div><div class="val" id="yv6">6.4</div><div class="unit">小时降水</div></div>
+      <div><div class="val">0</div></div>
+    </div>
+    <div class="time-hint">拖动底部时间轴切换 25 个时点 · 雨势随数据实时变化</div>
+    <div class="play-ctrl">
+      <button id="btnPrev">⏮</button>
+      <button id="btnPlay">▶</button>
+      <button id="btnNext">⏭</button>
+      <span class="tlabel" id="timeLabel">00:00</span>
+    </div>
+  </div>
+
+  <aside>
+    <div>
+      <h2>全国省市天气</h2>
+      <p class="sub" id="coverageInfo">正在载入省市目录…</p>
+    </div>
+    <div class="location-selectors">
+      <label>省级地区<select id="provinceSelect" aria-label="选择省级地区"></select></label>
+      <label>城市<select id="citySelect" aria-label="选择城市"></select></label>
+      <label>区县 / 天气地点<select id="stationSelect" aria-label="选择区县或天气地点"></select></label>
+    </div>
+    <div class="card">
+      <div class="sync-row"><h3 style="margin:0" id="weatherCity">湛江</h3><button id="btnSync">刷新天气</button></div>
+      <div class="weather-main"><div class="weather-temp" id="weatherTemp">--°</div><div class="weather-description" id="weatherDesc">等待同步</div></div>
+      <div class="weather-grid">
+        <div>体感温度<b id="weatherFeels">--</b></div><div>相对湿度<b id="weatherHumidity">--</b></div>
+        <div>10 米风速<b id="weatherWind">--</b></div><div id="currentRainLabel">近时段总降水<b id="weatherRain">--</b></div>
+      </div>
+      <div class="sync-state" id="syncStatus" role="status">尚未同步，暂无降雨数据；-- 不代表无雨。</div>
+      <div class="weather-footnote" id="weatherTime">数据时刻：-- · 北京时间</div>
+      <div class="weather-footnote">降雨数据来自联网模型估算/预报，不是雨量站实测；无雨时如实显示0，断网只保留带时间的已下载数据。<a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> 天气数据；地点目录来自 <a href="https://dev.qweather.com/docs/resource/location-list/" target="_blank" rel="noopener">和风天气公开城市列表</a>。</div>
+    </div>
+    <div class="card effect-panel">
+      <div class="sync-row"><h3>天气场景</h3><span class="mode-badge" id="effectBadge">自动联动</span></div>
+      <div class="effect-options">
+        <label>场景效果<select id="effectSelect" aria-label="选择天气效果"><option value="auto">自动跟随天气</option><option value="sunny">晴天 · 太阳</option><option value="cloudy">多云 · 流动云层</option><option value="fog">雾天 · 体积雾感</option><option value="rain">雨天 · 立体雨幕</option><option value="snow">雪天 · 飘雪</option></select></label>
+        <label>天气联动来源<select id="sceneSource" aria-label="场景天气来源"><option value="current">当前天气</option><option value="timeline">时间轴小时预报</option></select></label>
+        <label>昼夜效果<select id="daylightSelect" aria-label="场景昼夜"><option value="auto">自动昼夜</option><option value="day">白天预览</option><option value="night">夜间预览</option></select></label>
+      </div>
+      <div id="sceneStatus" role="status">等待同步天气；也可手动预览场景。</div>
+      <div class="sync-row" style="margin-top:10px"><span id="solarStatus" class="sub">太阳日程：06:00 日出 · 18:00 日落</span><button id="btnSolarPreview" aria-pressed="false">播放日出日落</button></div>
+      <p class="hint">太阳按简化日程东升西落：06:00 日出，18:00 日落，以北京时间为准，不按季节或城市修正。左侧为示意东、右侧为示意西。播放仅预览晴空，不修改真实天气与曲线；太阳方位、云雾均为艺术化示意。</p>
+    </div>
+    <details class="card">
+      <summary id="overviewSummary">全国概览 · 34 个省级代表地点</summary>
+      <p class="hint">每个省级地区仅展示一个代表地点，不代表全省天气一致。点选可进入该地点；其余城市用上方选择器查询。</p>
+      <div id="overviewStatus" class="sync-state">等待同步</div>
+      <div class="city-overview" id="cityOverview"></div>
+    </details>
+    <div class="sync-row"><h2 style="font-size:14px">降雨数据与 3D 雨势</h2><span class="mode-badge" id="dataMode">示例模式</span></div>
+    <div class="sync-row"><span class="sub">编辑后自动切换为手动模式</span><button id="btnLive">恢复联网曲线</button></div>
+    <div class="card">
+      <h3 id="curveHeading">示例降雨曲线</h3>
+      <div class="curve-head">
+        <span class="cv"><span id="curveVal">0.0</span> <small>mm/h</small></span>
+        <span style="font-size:10px;color:var(--text-dim)" id="curveTime">00:00</span>
+      </div>
+      <p class="hint" id="curvePeriod">示例时段 · 非实况</p>
+      <canvas id="curveCanvas"></canvas>
+      <p class="hint">上下拖动曲线改变强度 · 双击锚点将其归零 · Shift + 拖动可微调</p>
+    </div>
+
+    <div class="card">
+      <h3>精确输入 25 个时间点 <span style="color:var(--text-dim)">单位: mm/h</span></h3>
+      <textarea id="batchInput" spellcheck="false" placeholder="输入 25 个数值，用逗号、空格或换行分隔，如:&#10;0, 0.5, 1.2, 3.0, 5.5, ..."></textarea>
+    </div>
+
+    <div class="row-info">本页数据 <b id="savedInfo">00:00 → 0.0 mm/h</b>（手动编辑仅本次打开有效）</div>
+    <div class="row-info"><span class="dot">●</span> <b id="cityName">湛江</b></div>
+    <div class="weather-footnote">曲线是各时点前 1 小时的液态降雨量折算均值（雨 + 阵雨，不含雪）。当前天气卡片和所选曲线时段独立显示。页面打开期间每 15 分钟尝试刷新；关闭页面后停止。</div>
+
+    <div class="btn-row">
+      <button class="btn" id="btnReset">恢复默认</button>
+      <button class="btn" id="btnApply">应用新表数据</button>
+    </div>
+  </aside>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script src="locations.js"></script>
+<script>
+"use strict";
+/* ================== 数据 ================== */
+const N = 25; // 25 个时间点 (00:00 ~ 24:00)
+const DEFAULT_DATA = [0.2, 0.4, 1.0, 2.5, 1.8, 3.2, 6.0, 4.5, 2.0, 3.5,
+                      5.0, 8.5, 12.0, 18.5, 14.0, 9.0, 12.5, 19.0, 20.0, 15.5,
+                      10.0, 6.5, 4.0, 1.8, 0.5];
+let data = Array(N).fill(0); // 未取得联网数据时仅作绘图占位，不作为0毫米展示。
+let timeIndex = 14;          // 当前时间点
+let playing = false;
+let yMax = 20;               // 纵轴自动扩展
+
+const locationCatalog = window.WEATHER_LOCATIONS || { provinces: [] };
+const forecastCache = new Map(), weatherCache = new Map(), pendingWeather = new Map();
+const manualTables = new Map();
+let activeStation = null, dataMode = "waiting", forecastDate = "";
+// 2026-11-25 实际下载的洪山接口响应，仅用于断网兜底；保留获取时间，绝不冒充持续实时更新。
+const INITIAL_WEATHER = {"stationId":"101200113","fetchedAt":1795601507913,"record":{"current":{"time":"2026-11-25T18:00","interval":900,"temperature_2m":12.8,"relative_humidity_2m":56,"apparent_temperature":10.4,"weather_code":3,"wind_speed_10m":2.06,"precipitation":0,"rain":0,"showers":0,"snowfall":0,"is_day":0,"cloud_cover":100},"timezone":"Asia/Shanghai","hourly":{"time":["2026-11-25T00:00","2026-11-25T01:00","2026-11-25T02:00","2026-11-25T03:00","2026-11-25T04:00","2026-11-25T05:00","2026-11-25T06:00","2026-11-25T07:00","2026-11-25T08:00","2026-11-25T09:00","2026-11-25T10:00","2026-11-25T11:00","2026-11-25T12:00","2026-11-25T13:00","2026-11-25T14:00","2026-11-25T15:00","2026-11-25T16:00","2026-11-25T17:00","2026-11-25T18:00","2026-11-25T19:00","2026-11-25T20:00","2026-11-25T21:00","2026-11-25T22:00","2026-11-25T23:00","2026-11-26T00:00"],"rain":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"showers":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"weather_code":[1,1,1,1,1,2,1,45,45,45,3,3,3,3,3,3,3,3,3,3,3,3,3,3,2],"cloud_cover":[47,42,36,26,42,52,36,91,99,47,80,95,98,100,100,100,100,100,100,100,96,99,98,95,77],"snowfall":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}}};
+let liveSelectionPending = true, overviewBusy = false, overviewUpdated = 0;
+const REFRESH_MS = 15 * 60 * 1000;
+const CURRENT_FIELDS = "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,precipitation,rain,showers,snowfall,is_day,cloud_cover";
+let sceneState = { kind: "unknown", day: 1, cloud: .3, fog: 0, rainRate: 0, snow: 0, wind: 2, source: "等待同步" };
+const atmosphere = { day: .8, cloud: .3, fog: 0, wet: 0, snow: 0, sunProgress: .5 };
+let solarPreviewPlaying=false,solarPreviewHour=5.5;
+let sunRender={x:0,y:0,visible:false,progress:.5};
+let sceneStateKey = "";
+
+/* ================== 工具 ================== */
+const $ = id => document.getElementById(id);
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const fmt = i => String(Math.floor(i)).padStart(2, "0") + ":00";
+
+function toast(msg, err) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = "toast show" + (err ? " err" : "");
+  clearTimeout(t._tm);
+  t._tm = setTimeout(() => t.className = "toast" + (err ? " err" : ""), 2200);
+}
+
+/* ================== 全国省市天气同步 ================== */
+const numberText = (v, unit="", digits=1) => Number.isFinite(v) ? v.toFixed(digits)+unit : "--";
+function weatherName(code) {
+  const names={0:"晴",1:"大部晴朗",2:"局部多云",3:"阴",45:"雾",48:"雾凇",51:"小毛毛雨",53:"毛毛雨",55:"强毛毛雨",56:"轻冻毛毛雨",57:"冻毛毛雨",61:"小雨",63:"中雨",65:"大雨",66:"轻冻雨",67:"冻雨",71:"小雪",73:"中雪",75:"大雪",77:"米雪",80:"小阵雨",81:"阵雨",82:"强阵雨",85:"小阵雪",86:"强阵雪",95:"雷阵雨",96:"雷雨伴冰雹",99:"强雷雨伴冰雹"};
+  return names[code] || "天气资料缺失";
+}
+function selectedProvince() { return locationCatalog.provinces.find(p=>p.name===$("provinceSelect").value); }
+function selectedCity() { return selectedProvince()?.cities.find(c=>c.name===$("citySelect").value); }
+function option(select,value,label=value) { const o=document.createElement("option");o.value=value;o.textContent=label;select.append(o); }
+function currentLabel() {
+  if(!activeStation)return "未选择地点";
+  const city=$("citySelect").value;
+  return city.includes(activeStation.name) || city===activeStation.name+"市" ? city : city+" · "+activeStation.name;
+}
+function chooseProvince(name,cityName,stationId) {
+  $("provinceSelect").value=name;
+  const p=selectedProvince(); if(!p)return;
+  $("citySelect").replaceChildren();
+  for(const c of p.cities) option($("citySelect"),c.name);
+  if(cityName && p.cities.some(c=>c.name===cityName))$("citySelect").value=cityName;
+  chooseCity(stationId);
+}
+function chooseCity(stationId) {
+  const city=selectedCity();if(!city)return;
+  $("stationSelect").replaceChildren();
+  for(const s of city.stations)option($("stationSelect"),s.id,s.name);
+  if(stationId && city.stations.some(s=>s.id===stationId))$("stationSelect").value=stationId;
+  chooseStation();
+}
+function chooseStation() {
+  activeStation=selectedCity()?.stations.find(s=>s.id===$("stationSelect").value);
+  if(!activeStation)return;
+  playing=false;$("btnPlay").textContent="▶";
+  liveSelectionPending=true;forecastDate="";
+  const manual=manualTables.get(activeStation.id);
+  dataMode=manual?"manual":"waiting";
+  data=manual?manual.slice():Array(N).fill(0);
+  $("batchInput").value="";$("btnSync").disabled=false;
+  $("weatherCity").textContent=currentLabel();$("cityName").textContent=currentLabel();
+  $("stageSubtitle").textContent=currentLabel()+" · 小时降雨均值 · mm/h";
+  for(const id of ["weatherTemp","weatherFeels","weatherHumidity","weatherWind","weatherRain"])$(id).textContent="--";
+  $("weatherDesc").textContent="等待同步";$("weatherTime").textContent="数据时刻：-- · 北京时间";
+  refreshData();setTimeIndex(timeIndex);updateModeUI();
+  const cached=weatherCache.get(activeStation.id);
+  if(cached) renderSelectedWeather(activeStation,cached,false);
+  else setSyncStatus("loading","正在查询 "+currentLabel()+"…");
+  loadSelectedWeather(false);
+  renderOverview();
+}
+function enterManual() {
+  dataMode="manual";
+  if(activeStation)manualTables.set(activeStation.id,data.slice());
+  updateModeUI();
+}
+function updateModeUI() {
+  const live=dataMode==="live",manual=dataMode==="manual";
+  const entry=activeStation?forecastCache.get(activeStation.id):null;
+  const cached=entry && (entry.snapshot || Date.now()-entry.fetchedAt>REFRESH_MS*2);
+  $("dataMode").textContent=live?(cached?"已下载数据":"联网曲线"):manual?"手动模式":"暂无雨量";
+  $("dataMode").dataset.live=String(live);
+  $("sourceLabel").textContent=live?"Open-Meteo · "+(cached?"已下载快照":"模型估算 / 预报"):manual?"手动编辑 · 非实况":"尚未获得降雨数据";
+  $("curveHeading").textContent=live?"联网小时降雨曲线":manual?"手动降雨曲线":"等待联网降雨数据";
+  $("curvePeriod").textContent=live?forecastDate+" 00:00 至次日 00:00 · 北京时间 · 模型数据，非雨量站实测"+(cached?" · 缓存待刷新":""):manual?"00:00 至 24:00 · 手动模拟，天气刷新不覆盖":"暂未获得小时降雨数据；-- 表示未知，不代表无雨。";
+  updateSelectedPeriod();
+}
+function updateSelectedPeriod() {
+  $("selectedPeriod").textContent=dataMode==="live" ? forecastDate+" "+fmt(timeIndex)+" · 前1小时均值 · 模型估算/预报" : dataMode==="manual"?"手动模拟 · "+fmt(timeIndex)+" · 非实况":"降雨数据待同步 · 不代表0毫米";
+}
+function setSyncStatus(state,message) {
+  $("syncStatus").dataset.state=state;$("syncStatus").textContent=message;
+  $("headerSync").textContent=({ok:"已同步",loading:"同步中",partial:"雨量未同步",cached:"缓存待刷新",error:"同步失败"})[state]||"同步失败";
+  $("headerSync").style.color=state==="ok"?"#68cfb4":state==="loading"?"#8abce5":"#e8b278";
+}
+function weatherErrorText(error) {
+  if(error.name==="AbortError")return "天气接口请求超时";
+  if(error instanceof TypeError)return "浏览器未能访问天气接口（可能是网络、代理或跨域拦截）；请在F12网络面板查看 forecast 请求";
+  return error.message||"天气请求失败";
+}
+async function fetchWeather(stations, hourly, onRetry=()=>{}) {
+  const params=new URLSearchParams({latitude:stations.map(s=>s.lat).join(","),longitude:stations.map(s=>s.lon).join(","),current:CURRENT_FIELDS,timezone:"Asia/Shanghai",wind_speed_unit:"ms"});
+  if(hourly){params.set("hourly","rain,showers,weather_code,is_day,cloud_cover,snowfall");params.set("forecast_days","2");}
+  async function request(query,budget) {
+    const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),budget);
+    try {
+      const response=await fetch("https://api.open-meteo.com/v1/forecast?"+query,{signal:controller.signal,cache:"no-store",referrerPolicy:"no-referrer"});
+      if(!response.ok) {
+        let reason="";try {reason=String((await response.json()).reason||"").slice(0,180);}catch{}
+        const error=new Error(response.status===429?"天气服务请求过多，请稍后重试":"天气服务 HTTP "+response.status+(reason?"："+reason:""));error.httpStatus=response.status;throw error;
+      }
+      const body=await response.json();
+      if(body.error)throw new Error("天气服务返回错误："+String(body.reason||"未知原因").slice(0,180));
+      const records=Array.isArray(body)?body:[body];
+      if(records.length!==stations.length)throw new Error("城市响应数量不匹配");
+      return records;
+    } finally {clearTimeout(timeout);}
+  }
+  try {return await request(params,10000);}
+  catch(error) {
+    // 网络/超时或服务临时故障重试一次；不对限流、参数错误进行轰炸式重试。
+    if(error.name!=="AbortError" && !(error instanceof TypeError) && !(error.httpStatus>=500))throw error;
+    onRetry(error);
+    const basic=new URLSearchParams(params);
+    basic.set("current","temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,precipitation,rain,showers");
+    if(hourly)basic.set("hourly","rain,showers");
+    const records=await request(basic,16000);
+    for(const record of records)record.scene_details_limited=true;
+    return records;
+  }
+}
+function validateCurrent(record) {
+  if(!record?.current || typeof record.current.time!=="string" || !Number.isFinite(record.current.temperature_2m))throw new Error("天气数据缺失，稍后重试");
+}
+function parseForecast(record) {
+  validateCurrent(record);
+  const times=record.hourly?.time, rain=record.hourly?.rain, showers=record.hourly?.showers;
+  const day=record.current.time.slice(0,10);
+  const start=Array.isArray(times)?times.indexOf(day+"T00:00"):-1;
+  if(!Array.isArray(times)||!Array.isArray(rain)||!Array.isArray(showers)||start<0||start+25>times.length)throw new Error("未获得完整的25个小时数据");
+  const values=[];
+  for(let i=start;i<start+25;i++) {
+    if(i>start && Date.parse(times[i]+"+08:00")-Date.parse(times[i-1]+"+08:00")!==3600000)throw new Error("小时降雨时间不连续");
+    if(!Number.isFinite(rain[i])||!Number.isFinite(showers[i])||rain[i]<0||showers[i]<0)throw new Error("小时降雨数据缺失");
+    // rain/showers 是各时点前1小时的累计mm，除以1小时得到均值mm/h。
+    values.push(Math.round((rain[i]+showers[i])*100)/100);
+  }
+  return {record,values,day,start,fetchedAt:Date.now()};
+}
+function renderSelectedWeather(station,entry,failed) {
+  if(activeStation?.id!==station.id)return;
+  const c=entry.record.current;
+  $("weatherTemp").textContent=numberText(c.temperature_2m,"°");
+  $("weatherDesc").textContent=weatherName(c.weather_code);
+  $("weatherFeels").textContent=numberText(c.apparent_temperature," °C");
+  $("weatherHumidity").textContent=numberText(c.relative_humidity_2m," %",0);
+  $("weatherWind").textContent=numberText(c.wind_speed_10m," m/s");
+  $("weatherRain").textContent=numberText(c.precipitation," mm",2);
+  $("currentRainLabel").firstChild.textContent=Number.isFinite(c.interval)?"前 "+Math.round(c.interval/60)+" 分钟总降水":"近时段总降水";
+  $("weatherTime").textContent="天气时刻："+c.time.replace("T"," ")+" · 北京时间";
+  const hasForecast=Array.isArray(entry.values) && entry.values.length===N;
+  if(dataMode!=="manual" && hasForecast) {
+    const dayChanged=forecastDate!==entry.day;
+    dataMode="live";data=entry.values.slice();forecastDate=entry.day;
+    const i=liveSelectionPending||dayChanged?clamp(Number(c.time.slice(11,13)),0,24):timeIndex;
+    liveSelectionPending=false;
+    refreshData();setTimeIndex(i);savePoint(timeIndex);
+  }
+  if(dataMode!=="manual" && !hasForecast) {
+    // 当前天气可正常显示；小时雨量缺失绝不填0，也不留下另一日期的曲线。
+    dataMode="waiting";forecastDate="";data=Array(N).fill(0);refreshData();setTimeIndex(timeIndex);savePoint(timeIndex);
+  }
+  updateModeUI();updateSceneState();
+  const fetched=new Date(entry.fetchedAt).toLocaleString("zh-CN",{timeZone:"Asia/Shanghai",hour12:false});
+  const stale=Date.now()-entry.fetchedAt>REFRESH_MS*2 || Date.now()<entry.fetchedAt-60000;
+  let state=failed?"error":entry.snapshot||stale?"cached":hasForecast?"ok":"partial";
+  let message=failed?"联网刷新失败，显示上次下载的数据；":entry.snapshot?"已载入下载快照，尚未完成本次联网同步；":stale?"数据已过期，等待联网刷新；":hasForecast?"同步完成；":"当前天气已同步，小时降雨未同步："+entry.forecastError+"；";
+  message+="获取于 "+fetched+"（北京时间）"+(dataMode==="manual"?" · 保留手动曲线":" · 每15分钟尝试刷新")+(entry.record.scene_details_limited?" · 基础天气数据":"");
+  setSyncStatus(state,message);
+}
+async function loadSelectedWeather(force=false) {
+  const station=activeStation;if(!station)return;
+  const cached=weatherCache.get(station.id);
+  if(!force && cached && !cached.snapshot && cached.values && Date.now()-cached.fetchedAt>=0 && Date.now()-cached.fetchedAt<REFRESH_MS) {renderSelectedWeather(station,cached,false);return;}
+  $("btnSync").disabled=true;
+  if(!cached)$("weatherDesc").textContent="正在同步";
+  setSyncStatus("loading","正在同步 "+currentLabel()+"；首次请求最多10秒"+(cached?"，暂显示上次下载的数据":"，未同步的雨量显示 --")+"…");
+  if(!pendingWeather.has(station.id)) {
+    const promise=fetchWeather([station],true,error=>{
+      if(activeStation?.id===station.id)setSyncStatus("loading",weatherErrorText(error)+"；正在重试基础数据（最多16秒）…");
+    }).then(records=>{
+      const record=records[0];validateCurrent(record);
+      let entry;
+      try {entry=parseForecast(record);forecastCache.set(station.id,entry);}
+      catch(error) {entry={record,fetchedAt:Date.now(),forecastError:error.message};forecastCache.delete(station.id);}
+      weatherCache.set(station.id,entry);return entry;
+    }).finally(()=>pendingWeather.delete(station.id));
+    pendingWeather.set(station.id,promise);
+  }
+  try {
+    const entry=await pendingWeather.get(station.id);renderSelectedWeather(station,entry,false);renderOverview();
+  } catch(error) {
+    if(activeStation?.id!==station.id)return;
+    console.warn("天气同步失败",station.id,error);
+    const previous=weatherCache.get(station.id);
+    if(previous) {
+      renderSelectedWeather(station,previous,true);
+      setSyncStatus("error",weatherErrorText(error)+"；保留已下载数据（天气时刻 "+previous.record.current.time.replace("T"," ")+"），不是本次实时同步结果。请点刷新重试。");
+    } else {
+      $("weatherDesc").textContent="同步失败";
+      setSyncStatus("error",weatherErrorText(error)+"；"+(dataMode==="manual"?"保留手动曲线，非实况":"未取得雨量，不以示例值或0冒充真实降雨")+"。请检查网络后点刷新。");
+    }
+  } finally {if(activeStation?.id===station.id)$("btnSync").disabled=false;}
+}
+function provinceRepresentatives() {
+  return locationCatalog.provinces.map(p=>({province:p,city:p.cities[0],station:p.cities[0].stations[0]}));
+}
+function renderOverview() {
+  const container=$("cityOverview");container.replaceChildren();let ready=0;
+  for(const {province,city,station} of provinceRepresentatives()) {
+    const entry=weatherCache.get(station.id),button=document.createElement("button");
+    button.className="city-weather";button.setAttribute("aria-pressed",String(activeStation?.id===station.id));
+    const name=document.createElement("strong"),temp=document.createElement("span"),condition=document.createElement("small");
+    name.textContent=province.name;temp.textContent=entry?numberText(entry.record.current.temperature_2m,"°"):"--";
+    const stale=entry && Date.now()-entry.fetchedAt>REFRESH_MS*2;
+    condition.textContent=city.name+" · "+(entry?weatherName(entry.record.current.weather_code)+" · "+entry.record.current.time.slice(11,16)+(stale?"（过期）":""):"待同步");
+    if(entry)ready++;
+    button.append(name,temp,condition);button.onclick=()=>chooseProvince(province.name,city.name);container.append(button);
+  }
+  $("overviewSummary").textContent="全国概览 · "+ready+" / "+locationCatalog.provinces.length+" 个代表地点";
+}
+async function syncOverview(force=false) {
+  if(overviewBusy || (!force && Date.now()-overviewUpdated<REFRESH_MS))return;
+  const reps=provinceRepresentatives();if(!reps.length)return;
+  overviewBusy=true;$("overviewStatus").textContent="正在同步全国省级代表地点…";
+  try {
+    const records=await fetchWeather(reps.map(x=>x.station),false),now=Date.now();
+    let valid=0;
+    records.forEach((record,i)=>{try{validateCurrent(record);const id=reps[i].station.id;if(!weatherCache.get(id)?.values)weatherCache.set(id,{record,fetchedAt:now});valid++;}catch{}});
+    overviewUpdated=now;renderOverview();
+    $("overviewStatus").textContent="本次同步 "+valid+" / "+reps.length+" 个；均为代表地点，不作全省平均。";
+    $("overviewStatus").dataset.state=valid===reps.length?"ok":"error";
+  } catch(error) {
+    $("overviewStatus").textContent="全国概览同步失败："+weatherErrorText(error)+"；保留已有结果，可刷新重试。";$("overviewStatus").dataset.state="error";
+  } finally {overviewBusy=false;}
+}
+function setupLocations() {
+  const provinces=locationCatalog.provinces;
+  if(!provinces.length){setSyncStatus("error","地点目录未载入，请确认 locations.js 与 index.html 在同一文件夹。");return;}
+  const cityCount=provinces.reduce((n,p)=>n+p.cities.length,0),stationCount=provinces.reduce((n,p)=>n+p.cities.reduce((m,c)=>m+c.stations.length,0),0);
+  $("coverageInfo").textContent=provinces.length+" 个省级地区 · "+cityCount+" 个市级分组 · "+stationCount+" 个天气地点";
+  for(const p of provinces)option($("provinceSelect"),p.name);
+  $("provinceSelect").onchange=()=>chooseProvince($("provinceSelect").value);
+  $("citySelect").onchange=()=>chooseCity();$("stationSelect").onchange=chooseStation;
+  $("btnSync").onclick=()=>{loadSelectedWeather(true);syncOverview(true);};
+  $("btnLive").onclick=()=>{
+    if(!activeStation)return;manualTables.delete(activeStation.id);dataMode="waiting";liveSelectionPending=true;
+    stopSolarPreview();$("effectSelect").value="auto";$("daylightSelect").value="auto";$("sceneSource").value="current";
+    const entry=weatherCache.get(activeStation.id);
+    if(entry)renderSelectedWeather(activeStation,entry,false);
+    else {data=Array(N).fill(0);forecastDate="";refreshData();setTimeIndex(timeIndex);savePoint(timeIndex);updateModeUI();}
+    loadSelectedWeather(true);
+  };
+  try {
+    const seed=parseForecast(INITIAL_WEATHER.record);
+    seed.fetchedAt=INITIAL_WEATHER.fetchedAt;seed.snapshot=true;
+    forecastCache.set(INITIAL_WEATHER.stationId,seed);weatherCache.set(INITIAL_WEATHER.stationId,seed);
+  } catch(error) {console.warn("已下载天气快照不可用",error);}
+  chooseProvince("湖北省","武汉市",INITIAL_WEATHER.stationId);
+  // 优先同步当前地点，避免首次打开时与34地点批量请求争用连接。
+  const overviewDetails=$("overviewSummary").closest("details");
+  overviewDetails.addEventListener("toggle",()=>{if(overviewDetails.open)syncOverview();});
+  setInterval(()=>{if(document.visibilityState==="visible"){loadSelectedWeather(true);syncOverview();}},REFRESH_MS);
+  document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"){loadSelectedWeather(false);syncOverview();}});
+  window.addEventListener("online",()=>{loadSelectedWeather(true);syncOverview(true);});
+  window.addEventListener("offline",()=>{setSyncStatus("error","网络已断开；保留当前数据，恢复网络后自动尝试同步。");});
+}
+
+/* ================== 天气场景状态：预览与数据严格隔离 ================== */
+const beijingHourFormatter=new Intl.DateTimeFormat("en-GB",{timeZone:"Asia/Shanghai",hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23"});
+let solarClockAt=-Infinity,solarClockValue=12;
+function beijingSolarHour() {
+  const now=Date.now();
+  if(Math.abs(now-solarClockAt)>500) {
+    const parts=Object.fromEntries(beijingHourFormatter.formatToParts(new Date()).map(p=>[p.type,p.value]));
+    solarClockValue=Number(parts.hour)+Number(parts.minute)/60+Number(parts.second)/3600;solarClockAt=now;
+  }
+  return solarClockValue;
+}
+function getSolarCycle(hour) {
+  const h=((hour%24)+24)%24,day=h>=6 && h<18?1:0,progress=clamp((h-6)/12,0,1);
+  const smooth=t=>{t=clamp(t,0,1);return t*t*(3-2*t);};
+  const edge=Math.min(h-6,18-h);
+  const brightness=day?.3+.7*smooth(edge/1.25):h>=18&&h<18.6?.3*(1-smooth((h-18)/.6)):h>5.4&&h<6?.3*smooth((h-5.4)/.6):0;
+  const warm=clamp(1-Math.min(Math.abs(h-6),Math.abs(h-18))/1.8,0,1)*(h>=18?clamp((18.6-h)/.6,0,1):1);
+  return {hour:h,day,progress,brightness,warm,visible:!!day,x:.08+.84*progress,y:.26-.15*Math.sin(Math.PI*progress)};
+}
+function solarTimeText(hour) {
+  const minutes=Math.floor((((hour%24)+24)%24)*60);
+  return String(Math.floor(minutes/60)).padStart(2,"0")+":"+String(minutes%60).padStart(2,"0");
+}
+function stopSolarPreview() {
+  solarPreviewPlaying=false;
+  for(const [id,label] of [["btnSolarPreview","播放日出日落"],["btnSolarPreviewTop","日出日落演示"]]) {$(id).textContent=label;$(id).setAttribute("aria-pressed","false");}
+}
+function toggleSolarPreview() {
+  if(solarPreviewPlaying)stopSolarPreview();
+  else {
+    playing=false;$("btnPlay").textContent="▶";solarPreviewPlaying=true;solarPreviewHour=5.5;
+    $("btnSolarPreview").textContent="退出轨迹预览";$("btnSolarPreviewTop").textContent="退出演示";
+    for(const id of ["btnSolarPreview","btnSolarPreviewTop"])$(id).setAttribute("aria-pressed","true");
+  }
+  updateSceneState();
+}
+$("btnSolarPreview").onclick=toggleSolarPreview;
+$("btnSolarPreviewTop").onclick=toggleSolarPreview;
+$("btnSceneNow").onclick=()=>{
+  stopSolarPreview();playing=false;$("btnPlay").textContent="▶";
+  $("sceneSource").value="current";$("effectSelect").value="auto";$("daylightSelect").value="auto";
+  setTimeIndex(Math.floor(beijingSolarHour()));updateSceneState();
+};
+function codeKind(code) {
+  if(code===0 || code===1)return "sunny";
+  if(code===2 || code===3)return "cloudy";
+  if(code===45 || code===48)return "fog";
+  if([71,73,75,77,85,86].includes(code))return "snow";
+  if([51,53,55,56,57,61,63,65,66,67,80,81,82,95,96,99].includes(code))return "rain";
+  return "unknown";
+}
+function updateSceneState() {
+  const effect=$("effectSelect").value,light=$("daylightSelect").value,follow=$("sceneSource").value;
+  const entry=activeStation?weatherCache.get(activeStation.id):null;
+  const current=entry?.record.current;
+  let code=current?.weather_code,cover=current?.cloud_cover;
+  let snow=current?.snowfall,rate=0,source="等待联网 · 示意场景";
+  let solarHour=follow==="timeline"?timeIndex%24:beijingSolarHour();
+  if(current) {
+    source=(entry.snapshot||Date.now()-entry.fetchedAt>REFRESH_MS*2?"已下载天气 · ":"当前模型天气 · ")+current.time.replace("T"," ");
+    if(Number.isFinite(current.rain) && Number.isFinite(current.showers) && current.interval>0)rate=(current.rain+current.showers)*3600/current.interval;
+    else rate=codeKind(code)==="rain"?(Number.isFinite(current.precipitation)&&current.interval>0?current.precipitation*3600/current.interval:(entry.values?.[clamp(Number(current.time.slice(11,13)),0,24)]||0)):0;
+    if(follow==="timeline" && entry.values) {
+      const h=entry.record.hourly,i=entry.start+timeIndex;
+      const hasCode=Number.isFinite(h?.weather_code?.[i]);
+      code=hasCode?h.weather_code[i]:code;
+      cover=h?.cloud_cover?.[i];snow=h?.snowfall?.[i];
+      rate=data[timeIndex];
+      source=(entry.snapshot?"已下载小时数据 · ":"小时模型估算/预报 · ")+entry.day+" "+fmt(timeIndex)+(hasCode?"":" · 天气类型参考当前");
+    } else if(follow==="timeline")source+=" · 小时雨量缺失，暂参考当前天气";
+  }
+  let kind=codeKind(code);
+  if(rate>0 && kind!=="snow")kind="rain";
+  if(dataMode==="manual") {
+    rate=data[timeIndex];source="手动曲线模拟 · "+fmt(timeIndex);
+    if(rate>0)kind="rain";else if(kind==="rain"||kind==="snow")kind="cloudy";
+  }
+  if(effect!=="auto") {
+    kind=effect;source="手动效果预览 · 不改变真实天气";
+    rate=kind==="rain"?8:0;snow=kind==="snow"?1:0;
+    cover=kind==="sunny"?8:kind==="cloudy"?68:95;
+  }
+  if(light!=="auto") {solarHour=light==="day"?12:22;source+=" · 昼夜预览";}
+  if(solarPreviewPlaying) {
+    solarHour=solarPreviewHour;kind="sunny";cover=6;rate=0;snow=0;
+    source="日出日落预览 · 不改变真实天气";
+  }
+  const solar=getSolarCycle(solarHour),day=solar.day;
+  const rawCloud=Number.isFinite(cover)?clamp(cover/100,0,1):({sunny:.08,cloudy:.72,fog:.8,rain:.95,snow:.9,unknown:.3}[kind]);
+  // 晴/大部晴保留少量示意云，避免混合模型云量把晴天太阳完全盖住。
+  const cloud=kind==="sunny"?Math.min(rawCloud,.22):rawCloud;
+  sceneState={kind,day,solar,solarHour,daylight:solar.brightness,cloud,fog:kind==="fog"?1:kind==="rain"?.12:0,
+    rainRate:kind==="rain"?Math.max(0,rate):0,snow:kind==="snow"?clamp((Number.isFinite(snow)?snow:.7)*.65+.25,.25,1.2):0,
+    wind:Number.isFinite(current?.wind_speed_10m)?current.wind_speed_10m:2,source};
+  const preview=effect!=="auto" || light!=="auto" || solarPreviewPlaying;
+  const solarText=solarTimeText(solarHour);
+  const key=[kind,day,source,preview,dataMode,solarText,follow].join("|");
+  if(key!==sceneStateKey) {
+    sceneStateKey=key;
+    const names={sunny:day?"晴空日光":"晴朗夜空",cloudy:"云层漫游",fog:"雾中城市",rain:"城市雨幕",snow:"静谧雪景",unknown:"城市天气实景"};
+    $("sceneTitle").textContent=names[kind];
+    $("sceneBadge").textContent=(preview?"预览场景":follow==="timeline"?"时间轴场景":"当前天气")+" · "+(day?"白昼":"夜晚");
+    const timeOrigin=solarPreviewPlaying?"演示":light!=="auto"?"预览":follow==="timeline"?"时间轴":"现在";
+    const sunHint=day?(["rain","fog","snow"].includes(kind)?"云雨雾可能遮住太阳，可点顶部演示":"太阳左升右落，18:00 日落"):(solar.hour>=18?"太阳已落下，点顶部演示查看":"太阳尚未升起，06:00 日出");
+    $("solarHud").textContent=timeOrigin+" "+solarText+" · "+sunHint;
+    $("sceneStatus").textContent=source+" · "+(day?"白天":"夜间")+" · 太阳时刻 "+solarText+(kind==="fog"?" · 雾效为艺术化示意":"");
+    $("solarStatus").textContent=(solarPreviewPlaying?"轨迹预览 ":"太阳时刻 ")+solarText+" · 06:00 日出 / 18:00 日落";
+    $("sceneStatus").dataset.preview=String(preview);
+    $("effectBadge").textContent=preview?"效果预览":dataMode==="manual"?"手动模拟":"自动联动";
+    $("sceneTag").textContent="3D WEATHER / "+kind.toUpperCase()+" / "+(preview?"PREVIEW":dataMode==="manual"?"SIMULATION":current?"WEATHER SYNC":"WAITING");
+  }
+}
+for(const id of ["effectSelect","daylightSelect","sceneSource"])$(id).addEventListener("change",()=>{stopSolarPreview();updateSceneState();});
+
+/* ================== 时钟 ================== */
+setInterval(() => {
+  const d = new Date();
+  const p = n => String(n).padStart(2, "0");
+  $("clock").textContent = `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}, 500);
+
+/* ================== 离线三维引擎：透视 / 深度 / 雾 ================== */
+const stage = $("stage"), cvs = $("rainCanvas"), scene = $("scene3d");
+const ctx = cvs.getContext("2d");
+const skyCanvas = $("skyCanvas"), skyCtx = skyCanvas.getContext("2d");
+let fogColor = [.08,.14,.21], fogDensity = .006;
+let W = 0, H = 0, DPR = Math.min(window.devicePixelRatio || 1, 1.75);
+const camera = { yaw: .58, pitch: .42, radius: 112, x: 0, z: 0 };
+let autoOrbit = false, warmLights = false;
+let gl = null, program = null, fallback = null;
+let staticMesh, reflectionMesh, rainMesh;
+let frameCount = 0;
+const vertexSource = `
+attribute vec3 aPosition;
+attribute vec4 aColor;
+uniform mat4 uMatrix;
+varying vec4 vColor;
+varying float vDepth;
+void main() {
+  gl_Position = uMatrix * vec4(aPosition, 1.0);
+  vDepth = gl_Position.w;
+  vColor = aColor;
+}`;
+const fragmentSource = `
+precision mediump float;
+varying vec4 vColor;
+varying float vDepth;
+uniform float uFog;
+uniform vec3 uFogColor;
+uniform float uDaylight;
+void main() {
+  float fog = 1.0 - exp(-max(vDepth - 18.0, 0.0) * uFog);
+  vec3 surface = vColor.rgb * (1.0 + uDaylight * 1.05) + vec3(0.075, 0.09, 0.09) * uDaylight;
+  gl_FragColor = vec4(mix(surface, uFogColor, min(fog, 0.99)), vColor.a);
+}`;
+function shader(type, source) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, source); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+try {
+  gl = scene.getContext("webgl", { antialias: true, alpha: true, preserveDrawingBuffer: true });
+  if (!gl) throw new Error("WebGL unavailable");
+  program = gl.createProgram();
+  gl.attachShader(program, shader(gl.VERTEX_SHADER, vertexSource));
+  gl.attachShader(program, shader(gl.FRAGMENT_SHADER, fragmentSource));
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+  gl.useProgram(program);
+  gl.enable(gl.DEPTH_TEST); gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+} catch (err) {
+  console.warn("3D rendering fallback:", err);
+  gl = null;
+  // 保留同一套三维坐标与相机，以软件透视绘制降级显示。
+  const replacement = document.createElement("canvas");
+  replacement.id = "scene3d";
+  scene.replaceWith(replacement);
+  fallback = replacement.getContext("2d");
+  $("renderWarning").textContent = "当前浏览器未启用硬件加速，已切换软件三维模式。";
+}
+const locations = gl ? {
+  pos: gl.getAttribLocation(program, "aPosition"), color: gl.getAttribLocation(program, "aColor"),
+  matrix: gl.getUniformLocation(program, "uMatrix"), fog: gl.getUniformLocation(program, "uFog"),
+  fogColor: gl.getUniformLocation(program, "uFogColor"), daylight: gl.getUniformLocation(program, "uDaylight")
+} : null;
+function resize() {
+  W = Math.max(1, stage.clientWidth); H = Math.max(1, stage.clientHeight);
+  for (const c of [skyCanvas, cvs, $("scene3d")]) { c.width = Math.round(W * DPR); c.height = Math.round(H * DPR); }
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  skyCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  if (gl) gl.viewport(0, 0, scene.width, scene.height);
+  if (fallback) fallback.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener("resize", resize);
+const normalize = v => { const n = Math.hypot(...v) || 1; return v.map(x => x / n); };
+const cross = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const dot = (a,b) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+function cameraMatrix() {
+  const cp = Math.cos(camera.pitch), sp = Math.sin(camera.pitch);
+  const eye = [camera.x + camera.radius * cp * Math.sin(camera.yaw), 8 + camera.radius * sp,
+               camera.z + camera.radius * cp * Math.cos(camera.yaw)];
+  const z = normalize([eye[0]-camera.x, eye[1]-8, eye[2]-camera.z]);
+  const x = normalize(cross([0,1,0],z)), y = cross(z,x);
+  const view = [x[0],y[0],z[0],0, x[1],y[1],z[1],0, x[2],y[2],z[2],0, -dot(x,eye),-dot(y,eye),-dot(z,eye),1];
+  const f = 1 / Math.tan(Math.PI / 7), near = .3, far = 500;
+  const p = [f/(W/H),0,0,0, 0,f,0,0, 0,0,(far+near)/(near-far),-1, 0,0,2*far*near/(near-far),0];
+  const out = new Float32Array(16);
+  for (let c=0;c<4;c++) for (let r=0;r<4;r++) {
+    out[c*4+r] = p[r]*view[c*4] + p[4+r]*view[c*4+1] + p[8+r]*view[c*4+2] + p[12+r]*view[c*4+3];
+  }
+  return out;
+}
+/* ---- 立体建筑、灯窗、道路与镜像倒影 ---- */
+function vertex(arr, p, color) { arr.push(...p, ...color); }
+function quad(arr, a,b,c,d,color) {
+  for (const p of [a,b,c,a,c,d]) vertex(arr,p,color);
+}
+function box(arr,x,z,w,d,h,color) {
+  const x0=x-w/2,x1=x+w/2,z0=z-d/2,z1=z+d/2;
+  const face = (a,b,c,d,s) => quad(arr,a,b,c,d,[color[0]*s,color[1]*s,color[2]*s,color[3]]);
+  face([x0,0,z1],[x1,0,z1],[x1,h,z1],[x0,h,z1],.92);
+  face([x1,0,z0],[x0,0,z0],[x0,h,z0],[x1,h,z0],.72);
+  face([x1,0,z1],[x1,0,z0],[x1,h,z0],[x1,h,z1],.58);
+  face([x0,0,z0],[x0,0,z1],[x0,h,z1],[x0,h,z0],.8);
+  face([x0,h,z1],[x1,h,z1],[x1,h,z0],[x0,h,z0],1.35);
+}
+function mesh(values, dynamic=false) {
+  const a = values instanceof Float32Array ? values : new Float32Array(values);
+  const m = { values:a, count:a.length/7, buffer:gl ? gl.createBuffer() : null };
+  if (gl) { gl.bindBuffer(gl.ARRAY_BUFFER,m.buffer); gl.bufferData(gl.ARRAY_BUFFER,a,dynamic?gl.DYNAMIC_DRAW:gl.STATIC_DRAW); }
+  return m;
+}
+function releaseMesh(m) { if (gl && m) gl.deleteBuffer(m.buffer); }
+function buildCity() {
+  releaseMesh(staticMesh); releaseMesh(reflectionMesh);
+  let seed=7231;
+  const rnd=()=> (seed=(seed*16807)%2147483647)/2147483647;
+  const buildings=[], ground=[];
+  quad(ground,[-105,-.12,-105],[105,-.12,-105],[105,-.12,105],[-105,-.12,105],[.025,.047,.073,.64]);
+  for (let i=-4;i<=4;i++) {
+    const v=i*19;
+    quad(ground,[v-3.2,0,-94],[v+3.2,0,-94],[v+3.2,0,94],[v-3.2,0,94],[.035,.062,.088,.95]);
+    quad(ground,[-94,.01,v-3.2],[94,.01,v-3.2],[94,.01,v+3.2],[-94,.01,v+3.2],[.035,.062,.088,.95]);
+    for(let j=-91;j<94;j+=9) {
+      quad(ground,[v-.09,.04,j],[v+.09,.04,j],[v+.09,.04,j+3],[v-.09,.04,j+3],[.28,.42,.43,.5]);
+      quad(ground,[j,.04,v-.09],[j+3,.04,v-.09],[j+3,.04,v+.09],[j,.04,v+.09],[.28,.42,.43,.5]);
+    }
+  }
+  for(let ix=-3;ix<=2;ix++) for(let iz=-3;iz<=2;iz++) {
+    const x=ix*19+9.5, z=iz*19+9.5;
+    const w=7+rnd()*4, d=7+rnd()*4, h=9+rnd()*26;
+    const hue=rnd();
+    box(buildings,x,z,w,d,h,[.09+hue*.045,.17+hue*.04,.24+hue*.06,1]);
+    if(rnd()>.55) box(buildings,x,z,w*.55,d*.55,h+2,[.09,.18,.27,1]);
+    const light=warmLights?[.95,.63,.25,.95]:[.32,.72,.94,.9];
+    for(let yy=2;yy<h-1;yy+=2.5) {
+      for(let xx=-w/2+1;xx<w/2-.5;xx+=1.8) if(rnd()>.4) {
+        for(const side of [-1,1]) {
+          const zz=z+side*(d/2+.025);
+          quad(buildings,[x+xx,yy,zz],[x+xx+.62,yy,zz],[x+xx+.62,yy+1.1,zz],[x+xx,yy+1.1,zz],light);
+        }
+      }
+      for(let zz=-d/2+1;zz<d/2-.5;zz+=1.8) if(rnd()>.48) {
+        for(const side of [-1,1]) {
+          const xx=x+side*(w/2+.025);
+          quad(buildings,[xx,yy,z+zz],[xx,yy,z+zz+.62],[xx,yy+1.1,z+zz+.62],[xx,yy+1.1,z+zz],light);
+        }
+      }
+    }
+    // 屋顶轮廓灯
+    const edge=warmLights?[.72,.38,.12,1]:[.08,.48,.68,1];
+    quad(buildings,[x-w/2,h+.03,z-d/2],[x+w/2,h+.03,z-d/2],[x+w/2,h+.03,z-d/2+.12],[x-w/2,h+.03,z-d/2+.12],edge);
+  }
+  const reflection=[];
+  for(let i=0;i<buildings.length;i+=7) {
+    reflection.push(buildings[i], -buildings[i+1]-.18, buildings[i+2],
+      buildings[i+3]*.36,buildings[i+4]*.44,buildings[i+5]*.5,.38);
+  }
+  staticMesh=mesh([...ground,...buildings]); reflectionMesh=mesh(reflection);
+}
+/* ---- 天空、太阳 / 月亮、分层云与近景雾 ---- */
+const mixColor=(a,b,t)=>a.map((v,i)=>v+(b[i]-v)*t);
+const cssColor=(c,alpha=1)=>`rgba(${c.map(v=>Math.round(clamp(v,0,1)*255)).join(",")},${alpha})`;
+function makeCloud(dark=false) {
+  const texture=document.createElement("canvas");texture.width=512;texture.height=240;
+  const c=texture.getContext("2d");
+  const puffs=[[75,143,65],[126,119,80],[194,86,83],[260,110,100],[330,102,78],[391,141,77],[252,162,150]];
+  for(const [x,y,r] of puffs) {
+    const g=c.createRadialGradient(x,y-r*.25,0,x,y,r);
+    const color=dark?"72,92,112":"213,234,243";
+    g.addColorStop(0,`rgba(${color},.72)`);g.addColorStop(.52,`rgba(${color},.48)`);g.addColorStop(1,`rgba(${color},0)`);
+    c.fillStyle=g;c.fillRect(x-r,y-r,r*2,r*2);
+  }
+  return texture;
+}
+const cloudLight=makeCloud(false),cloudDark=makeCloud(true);
+function drawSky(ts) {
+  const c=skyCtx,d=atmosphere.day,cloud=atmosphere.cloud,mist=atmosphere.fog;
+  let top=mixColor([.014,.035,.078],[.055,.255,.43],d);
+  let bottom=mixColor([.055,.10,.16],[.35,.57,.70],d);
+  const overcast=mixColor([.055,.075,.11],[.29,.40,.49],d);
+  top=mixColor(top,overcast,cloud*.7+mist*.2);
+  bottom=mixColor(bottom,mixColor([.10,.13,.17],[.55,.64,.68],d),mist*.8);
+  const warm=sceneState.solar.warm*clamp(1-cloud*.72-mist*.6,0,1);
+  top=mixColor(top,[.30,.15,.24],warm*.20);
+  bottom=mixColor(bottom,[.88,.38,.19],warm*.48);
+  fogColor=mixColor(bottom,overcast,cloud*.15);
+  fogDensity=.0035+mist*.034+atmosphere.wet*.003;
+  const sky=c.createLinearGradient(0,0,0,H);
+  sky.addColorStop(0,cssColor(top));sky.addColorStop(.62,cssColor(bottom));sky.addColorStop(1,cssColor(bottom));
+  c.fillStyle=sky;c.fillRect(0,0,W,H);
+  // 简化示意轨迹保留在城市上方：06:00左侧升起，12:00高点，18:00右侧隐去。
+  const p=atmosphere.sunProgress;
+  const sx=W*(.08+.84*p+Math.sin(camera.yaw)*.008),sy=H*(.26-.15*Math.sin(Math.PI*p));
+  const r=Math.max(18,Math.min(W,H)*.039)*(1+sceneState.solar.warm*.12);
+  const sunlight=sceneState.solar.visible?d*clamp(1-cloud*1.08-mist*.85,0,1):0;
+  sunRender={x:sx,y:sy,visible:sunlight>.01,opacity:sunlight,progress:p};
+  if(sunlight>.01) {
+    c.save();c.globalAlpha=sunlight;
+    const glow=c.createRadialGradient(sx,sy,r*.2,sx,sy,r*5.5);
+    glow.addColorStop(0,"rgba(255,219,131,.55)");glow.addColorStop(.3,"rgba(255,198,100,.15)");glow.addColorStop(1,"rgba(255,205,115,0)");
+    c.fillStyle=glow;c.fillRect(sx-r*6,sy-r*6,r*12,r*12);
+    c.strokeStyle="rgba(255,226,157,.18)";c.lineWidth=1;
+    for(let i=0;i<12;i++) {const a=i*Math.PI/6+ts*.000015;c.beginPath();c.moveTo(sx+Math.cos(a)*r*1.7,sy+Math.sin(a)*r*1.7);c.lineTo(sx+Math.cos(a)*r*2.5,sy+Math.sin(a)*r*2.5);c.stroke();}
+    const disk=c.createRadialGradient(sx-r*.25,sy-r*.3,0,sx,sy,r);
+    disk.addColorStop(0,"#fff8dc");disk.addColorStop(.75,cssColor(mixColor([1,.90,.63],[1,.57,.24],sceneState.solar.warm)));disk.addColorStop(1,cssColor(mixColor([.93,.71,.31],[.96,.31,.13],sceneState.solar.warm)));
+    c.fillStyle=disk;c.beginPath();c.arc(sx,sy,r,0,Math.PI*2);c.fill();c.restore();
+  }
+  const night=sceneState.day?0:(1-d)*clamp(1-cloud*.95-mist,0,1);
+  if(night>.01) {
+    const sx=W*(.69+Math.sin(camera.yaw)*.02),sy=H*.205;
+    c.save();c.globalAlpha=night;
+    for(let i=0;i<76;i++) {
+      const x=((Math.sin(i*91.13)*.5+.5)*W+Math.sin(camera.yaw)*12)%W,y=(.04+(Math.cos(i*57.2)*.5+.5)*.49)*H;
+      c.fillStyle=`rgba(204,226,248,${.32+.25*Math.sin(ts*.0006+i)})`;c.beginPath();c.arc(x,y,i%7===0?1.3:.7,0,Math.PI*2);c.fill();
+    }
+    const halo=c.createRadialGradient(sx,sy,0,sx,sy,r*3.8);halo.addColorStop(0,"rgba(177,209,255,.24)");halo.addColorStop(1,"rgba(177,209,255,0)");
+    c.fillStyle=halo;c.fillRect(sx-r*4,sy-r*4,r*8,r*8);
+    c.fillStyle="#dbe8ef";c.beginPath();c.arc(sx,sy,r*.7,0,Math.PI*2);c.fill();
+    c.save();c.beginPath();c.arc(sx,sy,r*.7,0,Math.PI*2);c.clip();c.fillStyle=cssColor(top);c.beginPath();c.arc(sx+r*.42,sy-r*.2,r*.66,0,Math.PI*2);c.fill();c.restore();c.restore();
+  }
+  if(cloud>.025) {
+    c.save();const count=3+Math.round(cloud*7);
+    for(let i=0;i<count;i++) {
+      const depth=.65+(i%3)*.24,width=(.32+(i%4)*.07)*W*depth;
+      const shift=((i*.173+ts*(.000002+sceneState.wind*.0000005)+camera.yaw*.012)%1.5+1.5)%1.5;
+      const x=shift*(W+width)-width,y=H*(.04+(i%4)*.065);
+      const alpha=(.15+cloud*.56)*(1-mist*.25);
+      c.globalAlpha=alpha*(1-d*.75);c.drawImage(cloudDark,x,y,width,width*.48);
+      c.globalAlpha=alpha*d;c.drawImage(cloudLight,x,y,width,width*.48);
+    }
+    c.restore();
+  }
+}
+function drawFog(ts) {
+  if(atmosphere.fog<.01)return;
+  ctx.save();
+  const veil=ctx.createLinearGradient(0,H*.15,0,H);
+  const color=atmosphere.day>.5?"180,201,208":"89,111,133";
+  veil.addColorStop(0,`rgba(${color},0)`);veil.addColorStop(.5,`rgba(${color},${atmosphere.fog*.07})`);veil.addColorStop(1,`rgba(${color},${atmosphere.fog*.24})`);
+  ctx.fillStyle=veil;ctx.fillRect(0,0,W,H);
+  for(let i=0;i<4;i++) {
+    const width=W*1.4,offset=Math.sin(ts*.000055+i*1.9)*W*.25;
+    ctx.globalAlpha=atmosphere.fog*(.10+i*.015);
+    ctx.drawImage(atmosphere.day>.5?cloudLight:cloudDark,offset-W*.2,H*(.18+i*.15),width,H*.52);
+  }
+  ctx.restore();
+}
+const RAIN_COUNT=2400;
+const drops=Array.from({length:RAIN_COUNT},()=>({x:(Math.random()-.5)*180,y:Math.random()*80,z:(Math.random()-.5)*180,s:19+Math.random()*18}));
+const rainValues=new Float32Array(RAIN_COUNT*2*7 + 90*12*2*7);
+function updateRain(dt,k,ts) {
+  const snowing=atmosphere.snow>.015;
+  const count=snowing?Math.round(1100*Math.min(atmosphere.snow,1.2)):(k<.001?0:Math.round(RAIN_COUNT*Math.min(1,k*.8)));
+  let offset=0;
+  function point(x,y,z,r,g,b,a) { rainValues.set([x,y,z,r,g,b,a],offset); offset+=7; }
+  for(let i=0;i<count;i++) {
+    const d=drops[i];
+    d.y-=(snowing?d.s*.085:d.s*(.65+k))*dt;
+    d.x+=(snowing?Math.sin(ts*.0005+i)*1.6:-1.5-sceneState.wind*.35)*dt;
+    if(d.y<0 || d.x < -96) { d.y=75+Math.random()*5; d.x=(Math.random()-.5)*180; d.z=(Math.random()-.5)*180; }
+    if(snowing) {
+      const r=.07+(i%4)*.025,a=clamp(atmosphere.snow*.65,0,.8);
+      point(d.x-r,d.y,d.z,.88,.95,1,a);point(d.x+r,d.y,d.z,.88,.95,1,a);
+      point(d.x,d.y-r,d.z,.88,.95,1,a);point(d.x,d.y+r,d.z,.88,.95,1,a);
+    } else {
+      const len=.7+1.6*k;
+      point(d.x,d.y,d.z,.38,.65,.9,.24+k*.23);
+      point(d.x+.18,d.y+len,d.z+.05,.5,.77,1,.06+k*.1);
+    }
+  }
+  // 地面扩散涟漪，所有坐标均在三维世界中。
+  const rings=snowing?0:Math.round(90*Math.min(k,1));
+  for(let i=0;i<rings;i++) {
+    const age=(ts*.00065+i*.613)%1;
+    const x=Math.sin(i*91.7)*76,z=Math.cos(i*31.2)*76,r=.1+age*1.5;
+    for(let j=0;j<12;j++) {
+      const a=j*Math.PI/6,b=(j+1)*Math.PI/6,alpha=(1-age)*.32;
+      point(x+Math.cos(a)*r,.07,z+Math.sin(a)*r,.25,.65,.82,alpha);
+      point(x+Math.cos(b)*r,.07,z+Math.sin(b)*r,.25,.65,.82,alpha);
+    }
+  }
+  if(gl) { gl.bindBuffer(gl.ARRAY_BUFFER,rainMesh.buffer); gl.bufferSubData(gl.ARRAY_BUFFER,0,rainValues.subarray(0,offset)); }
+  rainMesh.count=offset/7;
+}
+function drawMesh(m,mode) {
+  gl.bindBuffer(gl.ARRAY_BUFFER,m.buffer);
+  gl.enableVertexAttribArray(locations.pos); gl.vertexAttribPointer(locations.pos,3,gl.FLOAT,false,28,0);
+  gl.enableVertexAttribArray(locations.color); gl.vertexAttribPointer(locations.color,4,gl.FLOAT,false,28,12);
+  gl.drawArrays(mode,0,m.count);
+}
+function softwareScene(matrix) {
+  const c=fallback;
+  c.clearRect(0,0,W,H);
+  const project=(v,i)=>{
+    const x=v[i],y=v[i+1],z=v[i+2];
+    const w=matrix[3]*x+matrix[7]*y+matrix[11]*z+matrix[15];
+    if(w<=1) return null;
+    return [(matrix[0]*x+matrix[4]*y+matrix[8]*z+matrix[12])/w*W/2+W/2,
+      H/2-(matrix[1]*x+matrix[5]*y+matrix[9]*z+matrix[13])/w*H/2,w];
+  };
+  const triangles=[];
+  for(const m of (atmosphere.wet>.025?[reflectionMesh,staticMesh]:[staticMesh])) for(let i=0;i<m.values.length;i+=21) {
+    const a=project(m.values,i),b=project(m.values,i+7),d=project(m.values,i+14);
+    if(a&&b&&d) triangles.push({a,b,d,v:m.values,i,depth:(a[2]+b[2]+d[2])/3});
+  }
+  triangles.sort((a,b)=>b.depth-a.depth);
+  for(const t of triangles) {
+    const fog=Math.exp(-Math.max(0,t.depth-18)*fogDensity),v=t.v,i=t.i;
+    const rgb=[v[i+3],v[i+4],v[i+5]].map((n,j)=>Math.round(255*clamp((n*(1+atmosphere.day*1.05)+[.075,.09,.09][j]*atmosphere.day)*fog+fogColor[j]*(1-fog),0,1)));
+    c.fillStyle=`rgba(${rgb.join(",")},${v[i+6]})`;
+    c.beginPath(); c.moveTo(t.a[0],t.a[1]); c.lineTo(t.b[0],t.b[1]); c.lineTo(t.d[0],t.d[1]); c.fill();
+  }
+  c.strokeStyle="rgba(125,192,238,.5)";
+  c.beginPath();
+  for(let i=0;i<rainMesh.count*7;i+=14) {
+    const a=project(rainValues,i),b=project(rainValues,i+7);
+    if(a&&b) {c.moveTo(a[0],a[1]);c.lineTo(b[0],b[1]);}
+  }
+  c.stroke();
+}
+let lastTs=performance.now(), smoothIntensity=0;
+function frame(ts) {
+  const dt=Math.min((ts-lastTs)/1000,.05);lastTs=ts;
+  if(solarPreviewPlaying) {solarPreviewHour+=dt*.55;if(solarPreviewHour>=19)stopSolarPreview();}
+  updateSceneState();
+  const ease=1-Math.exp(-dt*2.6);
+  for(const prop of ["cloud","fog","snow"])atmosphere[prop]+=(sceneState[prop]-atmosphere[prop])*ease;
+  atmosphere.day+=(sceneState.daylight-atmosphere.day)*ease;
+  atmosphere.sunProgress+=(sceneState.solar.progress-atmosphere.sunProgress)*ease;
+  const wetTarget=sceneState.rainRate>0?clamp(.35+sceneState.rainRate/15,0,1):sceneState.snow>0?.3:0;
+  atmosphere.wet+=(wetTarget-atmosphere.wet)*ease;
+  const target=clamp(sceneState.rainRate,0,60);
+  smoothIntensity+=(target-smoothIntensity)*Math.min(1,dt*4);
+  if(target===0 && smoothIntensity<.02) smoothIntensity=0;
+  const k=clamp(smoothIntensity/20,0,1.6);
+  if(autoOrbit && pointers.size===0) camera.yaw+=dt*.11;
+  drawSky(ts);updateRain(dt,k,ts);
+  const matrix=cameraMatrix();
+  if(gl && !gl.isContextLost()) {
+    gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+    gl.uniformMatrix4fv(locations.matrix,false,matrix);gl.uniform1f(locations.fog,fogDensity);
+    gl.uniform3fv(locations.fogColor,fogColor);gl.uniform1f(locations.daylight,atmosphere.day);
+    gl.depthMask(true);if(atmosphere.wet>.025)drawMesh(reflectionMesh,gl.TRIANGLES);drawMesh(staticMesh,gl.TRIANGLES);
+    gl.depthMask(false);drawMesh(rainMesh,gl.LINES);gl.depthMask(true);
+  } else if(fallback && frameCount%2===0) softwareScene(matrix);
+  ctx.clearRect(0,0,W,H);drawFog(ts);drawTimeAxis();frameCount++;
+  requestAnimationFrame(frame);
+}
+buildCity();rainMesh=mesh(rainValues,true);
+scene.addEventListener("webglcontextlost",e=>{
+  e.preventDefault();$("renderWarning").textContent="三维显示暂时中断，请刷新页面恢复；数据编辑仍可使用。";
+});
+
+/* ---- 底部时间轴 ---- */
+let axisRect = null;
+function drawTimeAxis() {
+  const y = H - 80;
+  const x0 = 30, x1 = W - 30;
+  axisRect = { x0, x1, y, w: x1 - x0 };
+
+  ctx.save();
+  const footer=ctx.createLinearGradient(0,H-160,0,H);
+  footer.addColorStop(0,"rgba(5,10,18,0)");footer.addColorStop(.6,"rgba(5,10,18,.76)");footer.addColorStop(1,"rgba(5,10,18,.96)");
+  ctx.fillStyle=footer;ctx.fillRect(0,H-160,W,160);
+  ctx.strokeStyle = "rgba(90,130,190,0.35)";
+  ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+
+  // 刻度标签 每 2 小时
+  ctx.fillStyle = "rgba(110,135,170,0.85)";
+  ctx.font = "10px Consolas, monospace";
+  ctx.textAlign = "center";
+  for (let h = 0; h <= 24; h += (W < 650 ? 4 : 2)) {
+    const px = x0 + (h / 24) * (x1 - x0);
+    ctx.fillText(String(h).padStart(2, "0") + ":00", px, y + 16);
+    ctx.strokeStyle = "rgba(90,130,190,0.35)";
+    ctx.beginPath(); ctx.moveTo(px, y - 3); ctx.lineTo(px, y + 3); ctx.stroke();
+  }
+
+  // 播放头
+  const px = x0 + (timeIndex / 24) * (x1 - x0);
+  ctx.strokeStyle = "rgba(111,179,255,0.95)";
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(px, y - 12); ctx.lineTo(px, y + 8); ctx.stroke();
+  ctx.fillStyle = "rgba(111,179,255,0.95)";
+  ctx.beginPath(); ctx.moveTo(px - 5, y - 12); ctx.lineTo(px + 5, y - 12); ctx.lineTo(px, y - 5); ctx.closePath(); ctx.fill();
+
+  // 播放头局部光晕，不再遮挡三维建筑。
+  const grd = ctx.createRadialGradient(px,y,0,px,y,25);
+  grd.addColorStop(0,"rgba(111,179,255,.3)"); grd.addColorStop(1,"rgba(111,179,255,0)");
+  ctx.fillStyle=grd; ctx.fillRect(px-25,y-25,50,50);
+  ctx.restore();
+}
+
+/* 时间轴与三维视角使用独立命中区域，避免拖动冲突。 */
+let axisPointer = null;
+const pointers = new Map();
+let pinchDistance = 0;
+function axisPick(e) {
+  if (!axisRect) return;
+  const x=e.clientX-cvs.getBoundingClientRect().left;
+  setTimeIndex(Math.round(clamp((x-axisRect.x0)/axisRect.w,0,1)*24),true);
+}
+function stopOrbit() { autoOrbit=false; $("btnOrbit").setAttribute("aria-pressed","false"); }
+function resetView() {
+  Object.assign(camera,{yaw:.58,pitch:.42,radius:112,x:0,z:0});stopOrbit();
+}
+function pan(dx,dy) {
+  const scale=camera.radius/Math.max(H,1)*.8;
+  camera.x=clamp(camera.x-dx*Math.cos(camera.yaw)*scale-dy*Math.sin(camera.yaw)*scale,-45,45);
+  camera.z=clamp(camera.z+dx*Math.sin(camera.yaw)*scale-dy*Math.cos(camera.yaw)*scale,-45,45);
+}
+cvs.addEventListener("contextmenu",e=>e.preventDefault());
+cvs.addEventListener("pointerdown",e=>{
+  e.preventDefault(); cvs.focus({preventScroll:true}); cvs.setPointerCapture(e.pointerId);
+  const y=e.clientY-cvs.getBoundingClientRect().top;
+  if(axisRect && Math.abs(y-axisRect.y)<23 && pointers.size===0) { axisPointer=e.pointerId;axisPick(e);return; }
+  if(axisPointer!==null) return;
+  stopOrbit(); pointers.set(e.pointerId,{x:e.clientX,y:e.clientY,pan:e.button===2||e.shiftKey});
+  cvs.classList.add("dragging");
+  if(pointers.size===2) {
+    const [a,b]=[...pointers.values()];pinchDistance=Math.hypot(a.x-b.x,a.y-b.y);
+  }
+});
+cvs.addEventListener("pointermove",e=>{
+  if(axisPointer===e.pointerId) {axisPick(e);return;}
+  const prev=pointers.get(e.pointerId);if(!prev)return;
+  const dx=e.clientX-prev.x,dy=e.clientY-prev.y;
+  pointers.set(e.pointerId,{...prev,x:e.clientX,y:e.clientY});
+  if(pointers.size===2) {
+    const [a,b]=[...pointers.values()],distance=Math.hypot(a.x-b.x,a.y-b.y);
+    if(distance>0 && pinchDistance>0) camera.radius=clamp(camera.radius*pinchDistance/distance,48,210);
+    pinchDistance=distance;pan(dx/2,dy/2);
+  } else if(prev.pan||e.shiftKey) pan(dx,dy);
+  else {camera.yaw-=dx*.006;camera.pitch=clamp(camera.pitch+dy*.005,.12,1.35);}
+});
+function releasePointer(e) {
+  if(axisPointer===e.pointerId)axisPointer=null;
+  pointers.delete(e.pointerId);pinchDistance=0;
+  if(pointers.size===0)cvs.classList.remove("dragging");
+}
+for(const event of ["pointerup","pointercancel","lostpointercapture"])cvs.addEventListener(event,releasePointer);
+cvs.addEventListener("wheel",e=>{
+  e.preventDefault();camera.radius=clamp(camera.radius*Math.exp(clamp(e.deltaY,-200,200)*.0012),48,210);
+},{passive:false});
+cvs.addEventListener("dblclick",e=>{
+  if(e.clientY-cvs.getBoundingClientRect().top<H-120)resetView();
+});
+cvs.addEventListener("keydown",e=>{
+  if(!["ArrowLeft","ArrowRight","ArrowUp","ArrowDown","+","-","Home"].includes(e.key))return;
+  e.preventDefault();stopOrbit();
+  if(e.key==="ArrowLeft")camera.yaw-=.09;
+  if(e.key==="ArrowRight")camera.yaw+=.09;
+  if(e.key==="ArrowUp")camera.pitch=clamp(camera.pitch+.06,.12,1.35);
+  if(e.key==="ArrowDown")camera.pitch=clamp(camera.pitch-.06,.12,1.35);
+  if(e.key==="+")camera.radius=clamp(camera.radius-6,48,210);
+  if(e.key==="-")camera.radius=clamp(camera.radius+6,48,210);
+  if(e.key==="Home")resetView();
+});
+$("btnViewReset").onclick=resetView;
+$("btnOrbit").onclick=()=>{autoOrbit=!autoOrbit;$("btnOrbit").setAttribute("aria-pressed",String(autoOrbit));};
+
+/* ================== 曲线编辑器 ================== */
+const ccvs = $("curveCanvas");
+const cctx = ccvs.getContext("2d");
+let CW = 0, CH = 0;
+
+function resizeCurve() {
+  CW = ccvs.clientWidth; CH = ccvs.clientHeight;
+  ccvs.width = CW * DPR; ccvs.height = CH * DPR;
+  cctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  drawCurve();
+}
+window.addEventListener("resize", resizeCurve);
+
+function curveXY(i, v) {
+  const px = 30 + (i / 24) * (CW - 42);
+  const py = CH - 14 - (clamp(v, 0, yMax) / yMax) * (CH - 30);
+  return [px, py];
+}
+
+function drawCurve() {
+  cctx.clearRect(0, 0, CW, CH);
+  if(dataMode==="waiting") {
+    cctx.fillStyle="#a7bdd5";cctx.font="12px sans-serif";cctx.textAlign="center";
+    cctx.fillText("暂无联网降雨数据（非0毫米）",CW/2,CH/2);return;
+  }
+  // 网格
+  cctx.strokeStyle = "rgba(90,130,190,0.15)";
+  cctx.lineWidth = 1;
+  for (let g = 0; g <= 4; g++) {
+    const gy = CH - 14 - (g / 4) * (CH - 30);
+    cctx.beginPath(); cctx.moveTo(30, gy); cctx.lineTo(CW - 12, gy); cctx.stroke();
+  }
+  // Y 标签
+  cctx.fillStyle = "rgba(100,125,160,0.9)";
+  cctx.font = "9px Consolas, monospace";
+  cctx.textAlign = "right";
+  for (let g = 0; g <= 4; g++) {
+    const gy = CH - 14 - (g / 4) * (CH - 30);
+    cctx.fillText((yMax * g / 4).toFixed(0), 26, gy + 3);
+  }
+  // X 标签
+  cctx.textAlign = "center";
+  for (let h = 0; h <= 24; h += 6) {
+    const [px] = curveXY(h, 0);
+    cctx.fillText(String(h).padStart(2, "0"), px, CH - 2);
+  }
+
+  // 面积
+  cctx.beginPath();
+  let [sx, sy] = curveXY(0, data[0]);
+  cctx.moveTo(sx, sy);
+  for (let i = 1; i < N; i++) { const [x, y] = curveXY(i, data[i]); cctx.lineTo(x, y); }
+  const [ex] = curveXY(24, 0);
+  cctx.lineTo(ex, CH - 14); cctx.lineTo(sx, CH - 14); cctx.closePath();
+  const ag = cctx.createLinearGradient(0, 0, 0, CH);
+  ag.addColorStop(0, "rgba(111,179,255,0.28)");
+  ag.addColorStop(1, "rgba(111,179,255,0.02)");
+  cctx.fillStyle = ag; cctx.fill();
+
+  // 线
+  cctx.beginPath();
+  cctx.moveTo(sx, sy);
+  for (let i = 1; i < N; i++) { const [x, y] = curveXY(i, data[i]); cctx.lineTo(x, y); }
+  cctx.strokeStyle = "rgba(170,210,255,0.9)";
+  cctx.lineWidth = 1.4;
+  cctx.stroke();
+
+  // 锚点
+  for (let i = 0; i < N; i++) {
+    const [x, y] = curveXY(i, data[i]);
+    const cur = i === timeIndex;
+    cctx.beginPath();
+    cctx.arc(x, y, cur ? 4.5 : 2.5, 0, Math.PI * 2);
+    cctx.fillStyle = cur ? "#8ec6ff" : "rgba(150,190,235,0.75)";
+    cctx.fill();
+    if (cur) {
+      cctx.strokeStyle = "rgba(111,179,255,0.5)";
+      cctx.lineWidth = 1;
+      cctx.beginPath(); cctx.arc(x, y, 8, 0, Math.PI * 2); cctx.stroke();
+    }
+  }
+}
+
+let dragIdx = -1, dragFine = false;
+function curvePick(e) {
+  if(dataMode==="waiting")return {idx:-1,dist:Infinity};
+  const r = ccvs.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  let best = -1, bd = 1e9;
+  for (let i = 0; i < N; i++) {
+    const [x, y] = curveXY(i, data[i]);
+    const d = Math.hypot(mx - x, my - y);
+    if (d < bd) { bd = d; best = i; }
+  }
+  return { idx: best, dist: bd, mx, my };
+}
+ccvs.addEventListener("pointerdown", e => {
+  const { idx, dist } = curvePick(e);
+  if (idx >= 0 && dist < 26) {
+    dragIdx = idx; dragFine = e.shiftKey;
+    ccvs.setPointerCapture(e.pointerId);
+    setTimeIndex(idx,true);
+  }
+});
+ccvs.addEventListener("pointermove", e => {
+  if (dragIdx < 0) return;
+  const r = ccvs.getBoundingClientRect();
+  const my = e.clientY - r.top;
+  let v = (CH - 14 - my) / (CH - 30) * yMax;
+  if (dragFine) v = data[dragIdx] + (v - data[dragIdx]) * 0.25; // Shift 微调
+  data[dragIdx] = clamp(Math.round(v * 10) / 10, 0, yMax);
+  enterManual();
+  refreshData();
+  drawCurve();
+});
+ccvs.addEventListener("pointerup", () => {
+  if (dragIdx >= 0) {
+    savePoint(dragIdx);
+    dragIdx = -1;
+  }
+});
+ccvs.addEventListener("dblclick", e => {
+  const { idx, dist } = curvePick(e);
+  if (idx >= 0 && dist < 26) {
+    data[idx] = 0;
+    enterManual();
+    refreshData(); drawCurve(); savePoint(idx);
+    toast(`已将 ${fmt(idx)} 的降雨强度归零`);
+  }
+});
+
+/* ================== 状态同步 ================== */
+function updateYMax() {
+  const m = Math.max(...data.map(v => v), 5);
+  yMax = m <= 20 ? 20 : Math.ceil(m / 4) * 4;
+  $("yv20").textContent = yMax;
+  $("yv13").textContent = (yMax * 0.64).toFixed(1);
+  $("yv6").textContent = (yMax * 0.32).toFixed(1);
+}
+
+function setTimeIndex(i, userSelected=false) {
+  timeIndex = clamp(i, 0, 24);
+  if(userSelected) {
+    stopSolarPreview();$("sceneSource").value="timeline";$("daylightSelect").value="auto";
+    updateSceneState();
+  }
+  $("timeLabel").textContent = fmt(timeIndex);
+  $("curveTime").textContent = fmt(timeIndex);
+  $("bigVal").textContent = dataMode==="waiting"?"--":data[timeIndex].toFixed(2);
+  $("curveVal").textContent = dataMode==="waiting"?"--":data[timeIndex].toFixed(2);
+  updateSelectedPeriod();
+  drawCurve();
+}
+
+function savePoint(i) {
+  $("savedInfo").textContent = dataMode==="waiting"?`${fmt(i)} → 未取得降雨数据`:`${fmt(i)} → ${data[i].toFixed(2)} mm/h`;
+}
+
+function refreshData() {
+  updateYMax();
+  $("bigVal").textContent = dataMode==="waiting"?"--":data[timeIndex].toFixed(2);
+  $("curveVal").textContent = dataMode==="waiting"?"--":data[timeIndex].toFixed(2);
+}
+
+/* ================== 按钮 ================== */
+$("btnPrev").onclick = () => setTimeIndex(timeIndex - 1,true);
+$("btnNext").onclick = () => setTimeIndex(timeIndex + 1,true);
+$("btnPlay").onclick = () => {
+  playing = !playing;
+  if(playing)setTimeIndex(timeIndex,true);
+  $("btnPlay").textContent = playing ? "⏸" : "▶";
+};
+setInterval(() => {
+  if (playing) setTimeIndex(timeIndex >= 24 ? 0 : timeIndex + 1,true);
+}, 1000);
+
+$("btnReset").textContent = "示例雨势";
+$("btnReset").onclick = () => {
+  data = DEFAULT_DATA.slice(); enterManual();
+  refreshData(); drawCurve(); setTimeIndex(timeIndex); savePoint(timeIndex);
+  $("batchInput").value = "";
+  toast("已载入示例雨势（手动模拟，非实况）");
+};
+
+$("btnApply").onclick = () => {
+  const raw = $("batchInput").value.trim();
+  if (!raw) { toast("请先输入 25 个时间点数据", true); return; }
+  const arr = raw.split(/[,，\s;；]+/).filter(s => s.length).map(Number);
+  if (arr.length !== N || arr.some(v => !Number.isFinite(v) || v < 0 || v > 5000)) {
+    toast(`解析失败：需要 ${N} 个 0～5000 的数值，当前解析到 ${arr.length} 个`, true);
+    return;
+  }
+  data = arr.map(v => Math.round(v * 100) / 100);
+  enterManual();
+  refreshData(); drawCurve(); setTimeIndex(timeIndex);
+  savePoint(timeIndex);
+  toast("新表数据已应用，雨势实时更新 ✔");
+};
+
+// 省、市、区县的切换由 setupLocations 统一处理，不再使用模拟城市倍率。
+
+/* 切换楼宇灯光色温，保持夜间主题。 */
+$("btnTheme").textContent = "灯光 · 冷蓝";
+$("btnTheme").onclick = () => {
+  warmLights = !warmLights;
+  buildCity();
+  $("btnTheme").textContent = warmLights ? "灯光 · 暖黄" : "灯光 · 冷蓝";
+};
+
+/* ================== 启动 ================== */
+$("batchInput").value = "";
+resize();
+resizeCurve();
+setTimeIndex(14);
+savePoint(14);
+updateYMax();
+requestAnimationFrame(frame);
+setupLocations();
+</script>
+</body>
+</html>
